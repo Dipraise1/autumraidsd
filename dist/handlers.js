@@ -6,67 +6,91 @@ const wallet_1 = require("./services/wallet");
 const pool_1 = require("./services/pool");
 // In-memory storage for demo (replace with database in production)
 const userSessions = new Map();
+// Utility function to safely edit message text with error handling
+const safeEditMessageText = async (ctx, text, extra) => {
+    try {
+        await ctx.editMessageText(text, extra);
+    }
+    catch (error) {
+        // If message edit fails (e.g., identical content), just answer callback
+        if (error.description?.includes('message is not modified')) {
+            await ctx.answerCbQuery('✅ Updated');
+            return false; // Indicate no edit was made
+        }
+        else {
+            throw error;
+        }
+    }
+    return true; // Indicate edit was successful
+};
 // Handle callback queries
 const handleCallbackQueries = (bot) => {
     // Find raids
     bot.action('find_raids', async (ctx) => {
-        const publicPools = pool_1.PoolService.getPublicPools();
-        if (publicPools.length === 0) {
-            const noRaidsText = `🔍 *No Active Raids Available*
+        try {
+            const publicPools = pool_1.PoolService.getPublicPools();
+            if (publicPools.length === 0) {
+                const noRaidsText = `🔍 *No Active Raids Available*
 
 There are currently no active raids. 
 
 *Create the first one or check back later!*`;
-            const noRaidsKeyboard = telegraf_1.Markup.inlineKeyboard([
-                [
-                    telegraf_1.Markup.button.callback('🏗️ Create First Pool', 'create_pool'),
-                    telegraf_1.Markup.button.callback('🔄 Refresh', 'find_raids')
-                ],
+                const noRaidsKeyboard = telegraf_1.Markup.inlineKeyboard([
+                    [
+                        telegraf_1.Markup.button.callback('🏗️ Create First Pool', 'create_pool'),
+                        telegraf_1.Markup.button.callback('🔄 Refresh', 'find_raids')
+                    ],
+                    [telegraf_1.Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]
+                ]);
+                await safeEditMessageText(ctx, noRaidsText, {
+                    parse_mode: 'Markdown',
+                    ...noRaidsKeyboard
+                });
+                return;
+            }
+            let raidsText = `🔍 *Active Raids Available*\n\n`;
+            publicPools.forEach((pool, index) => {
+                const stats = pool_1.PoolService.getPoolStats(pool.id);
+                const timeLeft = Math.max(0, pool.expiresAt.getTime() - Date.now());
+                const hoursLeft = Math.ceil(timeLeft / (1000 * 60 * 60));
+                raidsText += `*Raid #${index + 1}: ${pool.name}*\n`;
+                raidsText += `💰 Reward: ${pool.reward} SOL per action\n`;
+                raidsText += `⏰ Duration: ${hoursLeft} hours remaining\n`;
+                raidsText += `📱 Actions: ${pool.actions.join(', ')}\n`;
+                raidsText += `👥 Participants: ${stats?.participants || 0}\n`;
+                raidsText += `📊 Budget: ${pool.currentBudget.toFixed(3)}/${pool.budget.toFixed(3)} SOL\n\n`;
+            });
+            raidsText += `*Select a raid to join:*`;
+            const raidButtons = publicPools.map((pool, index) => [
+                telegraf_1.Markup.button.callback(`🚀 Join ${pool.name}`, `join_raid_${pool.id}`)
+            ]);
+            const raidKeyboard = telegraf_1.Markup.inlineKeyboard([
+                ...raidButtons,
                 [telegraf_1.Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]
             ]);
-            await ctx.editMessageText(noRaidsText, {
+            await safeEditMessageText(ctx, raidsText, {
                 parse_mode: 'Markdown',
-                ...noRaidsKeyboard
+                ...raidKeyboard
             });
-            return;
         }
-        let raidsText = `🔍 *Active Raids Available*\n\n`;
-        publicPools.forEach((pool, index) => {
-            const stats = pool_1.PoolService.getPoolStats(pool.id);
-            const timeLeft = Math.max(0, pool.expiresAt.getTime() - Date.now());
-            const hoursLeft = Math.ceil(timeLeft / (1000 * 60 * 60));
-            raidsText += `*Raid #${index + 1}: ${pool.name}*\n`;
-            raidsText += `💰 Reward: ${pool.reward} SOL per action\n`;
-            raidsText += `⏰ Duration: ${hoursLeft} hours remaining\n`;
-            raidsText += `📱 Actions: ${pool.actions.join(', ')}\n`;
-            raidsText += `👥 Participants: ${stats?.participants || 0}\n`;
-            raidsText += `📊 Budget: ${pool.currentBudget.toFixed(3)}/${pool.budget.toFixed(3)} SOL\n\n`;
-        });
-        raidsText += `*Select a raid to join:*`;
-        const raidButtons = publicPools.map((pool, index) => [
-            telegraf_1.Markup.button.callback(`🚀 Join ${pool.name}`, `join_raid_${pool.id}`)
-        ]);
-        const raidKeyboard = telegraf_1.Markup.inlineKeyboard([
-            ...raidButtons,
-            [telegraf_1.Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]
-        ]);
-        await ctx.editMessageText(raidsText, {
-            parse_mode: 'Markdown',
-            ...raidKeyboard
-        });
+        catch (error) {
+            console.error('Error in find_raids:', error);
+            await ctx.answerCbQuery('❌ Error loading raids');
+        }
     });
     // My balance
     bot.action('my_balance', async (ctx) => {
-        const userId = ctx.from?.id.toString() || 'unknown';
-        const userProfile = wallet_1.WalletService.getUserProfile(userId);
-        if (!userProfile || !userProfile.wallet) {
-            const startKeyboard = telegraf_1.Markup.inlineKeyboard([
-                [telegraf_1.Markup.button.callback('🚀 Start Bot', 'back_to_menu')]
-            ]);
-            await ctx.editMessageText('❌ Please start the bot first to create your wallet!', startKeyboard);
-            return;
-        }
-        const balanceText = `💳 *Your Wallet & Balance*
+        try {
+            const userId = ctx.from?.id.toString() || 'unknown';
+            const userProfile = wallet_1.WalletService.getUserProfile(userId);
+            if (!userProfile || !userProfile.wallet) {
+                const startKeyboard = telegraf_1.Markup.inlineKeyboard([
+                    [telegraf_1.Markup.button.callback('🚀 Start Bot', 'back_to_menu')]
+                ]);
+                await safeEditMessageText(ctx, '❌ Please start the bot first to create your wallet!', startKeyboard);
+                return;
+            }
+            const balanceText = `💳 *Your Wallet & Balance*
 
 *Wallet Address:*
 \`${userProfile.wallet.publicKey}\`
@@ -82,21 +106,26 @@ There are currently no active raids.
 ⏳ Pending rewards being processed...
 
 *X Account:* ${userProfile.xUsername || 'Not connected'}`;
-        const balanceKeyboard = telegraf_1.Markup.inlineKeyboard([
-            [
-                telegraf_1.Markup.button.callback('💸 Withdraw', 'withdraw'),
-                telegraf_1.Markup.button.callback('📊 Transaction History', 'history')
-            ],
-            [
-                telegraf_1.Markup.button.callback('🔗 Connect X', 'connect_x'),
-                telegraf_1.Markup.button.callback('🔄 Refresh Balance', 'refresh_balance')
-            ],
-            [telegraf_1.Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]
-        ]);
-        await ctx.editMessageText(balanceText, {
-            parse_mode: 'Markdown',
-            ...balanceKeyboard
-        });
+            const balanceKeyboard = telegraf_1.Markup.inlineKeyboard([
+                [
+                    telegraf_1.Markup.button.callback('💸 Withdraw', 'withdraw'),
+                    telegraf_1.Markup.button.callback('📊 Transaction History', 'history')
+                ],
+                [
+                    telegraf_1.Markup.button.callback('🔗 Connect X', 'connect_x'),
+                    telegraf_1.Markup.button.callback('🔄 Refresh Balance', 'refresh_balance')
+                ],
+                [telegraf_1.Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]
+            ]);
+            await safeEditMessageText(ctx, balanceText, {
+                parse_mode: 'Markdown',
+                ...balanceKeyboard
+            });
+        }
+        catch (error) {
+            console.error('Error in my_balance:', error);
+            await ctx.answerCbQuery('❌ Error loading balance');
+        }
     });
     // Connect X
     bot.action('connect_x', async (ctx) => {
@@ -128,7 +157,7 @@ There are currently no active raids.
                 ],
                 [telegraf_1.Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]
             ]);
-            await ctx.editMessageText(alreadyConnectedText, {
+            await safeEditMessageText(ctx, alreadyConnectedText, {
                 parse_mode: 'Markdown',
                 ...connectedKeyboard
             });
@@ -152,7 +181,7 @@ Example: \`username123\``;
                 ],
                 [telegraf_1.Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]
             ]);
-            await ctx.editMessageText(connectText, {
+            await safeEditMessageText(ctx, connectText, {
                 parse_mode: 'Markdown',
                 ...connectKeyboard
             });
@@ -178,7 +207,7 @@ Please provide the following details:
             ],
             [telegraf_1.Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]
         ]);
-        await ctx.editMessageText(createText, {
+        await safeEditMessageText(ctx, createText, {
             parse_mode: 'Markdown',
             ...createKeyboard
         });
@@ -193,7 +222,7 @@ Please send the name of your pool (e.g., "Crypto Project Launch", "NFT Collectio
         const formKeyboard = telegraf_1.Markup.inlineKeyboard([
             [telegraf_1.Markup.button.callback('❌ Cancel Creation', 'cancel_pool_creation')]
         ]);
-        await ctx.editMessageText(formText, {
+        await safeEditMessageText(ctx, formText, {
             parse_mode: 'Markdown',
             ...formKeyboard
         });
@@ -208,7 +237,7 @@ Please send the name of your pool (e.g., "Crypto Project Launch", "NFT Collectio
         const cancelText = `❌ *Pool Creation Cancelled*
 
 Returning to main menu...`;
-        await ctx.editMessageText(cancelText, {
+        await safeEditMessageText(ctx, cancelText, {
             parse_mode: 'Markdown'
         });
         // Return to main menu after delay
@@ -232,7 +261,7 @@ Earn SOL by participating in social media campaigns on Twitter/X.
                     telegraf_1.Markup.button.callback('⚙️ Settings', 'settings')
                 ]
             ]);
-            await ctx.editMessageText(welcomeText, {
+            await safeEditMessageText(ctx, welcomeText, {
                 parse_mode: 'Markdown',
                 ...keyboard
             });
@@ -259,7 +288,7 @@ Earn SOL by participating in social media campaigns on Twitter/X.
                 telegraf_1.Markup.button.callback('⚙️ Settings', 'settings')
             ]
         ]);
-        await ctx.editMessageText(welcomeText, {
+        await safeEditMessageText(ctx, welcomeText, {
             parse_mode: 'Markdown',
             ...keyboard
         });
@@ -296,7 +325,7 @@ Earn SOL by participating in social media campaigns on Twitter/X.
                 telegraf_1.Markup.button.callback('🔙 Back to Raids', 'find_raids')
             ]
         ]);
-        await ctx.editMessageText(joinText, {
+        await safeEditMessageText(ctx, joinText, {
             parse_mode: 'Markdown',
             ...joinKeyboard
         });
@@ -317,7 +346,7 @@ Please send your X (Twitter) username without the @ symbol.
         const usernameKeyboard = telegraf_1.Markup.inlineKeyboard([
             [telegraf_1.Markup.button.callback('❌ Cancel', 'connect_x')]
         ]);
-        await ctx.editMessageText(usernameText, {
+        await safeEditMessageText(ctx, usernameText, {
             parse_mode: 'Markdown',
             ...usernameKeyboard
         });
@@ -337,7 +366,7 @@ Please send your new X (Twitter) username without the @ symbol.
         const changeKeyboard = telegraf_1.Markup.inlineKeyboard([
             [telegraf_1.Markup.button.callback('❌ Cancel', 'connect_x')]
         ]);
-        await ctx.editMessageText(changeText, {
+        await safeEditMessageText(ctx, changeText, {
             parse_mode: 'Markdown',
             ...changeKeyboard
         });
@@ -349,7 +378,7 @@ Please send your new X (Twitter) username without the @ symbol.
         const userId = ctx.from?.id.toString() || 'unknown';
         const userProfile = wallet_1.WalletService.getUserProfile(userId);
         if (!userProfile) {
-            await ctx.editMessageText('❌ Please start the bot first!');
+            await safeEditMessageText(ctx, '❌ Please start the bot first!');
             return;
         }
         const statsText = `📊 *Your Statistics*
@@ -378,7 +407,7 @@ Please send your new X (Twitter) username without the @ symbol.
             ],
             [telegraf_1.Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]
         ]);
-        await ctx.editMessageText(statsText, {
+        await safeEditMessageText(ctx, statsText, {
             parse_mode: 'Markdown',
             ...statsKeyboard
         });
@@ -412,7 +441,7 @@ Please send your new X (Twitter) username without the @ symbol.
             ],
             [telegraf_1.Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]
         ]);
-        await ctx.editMessageText(settingsText, {
+        await safeEditMessageText(ctx, settingsText, {
             parse_mode: 'Markdown',
             ...settingsKeyboard
         });
@@ -435,7 +464,7 @@ Please send your new X (Twitter) username without the @ symbol.
                     telegraf_1.Markup.button.callback('🔙 Back to Balance', 'my_balance')
                 ]
             ]);
-            await ctx.editMessageText(lowBalanceText, {
+            await safeEditMessageText(ctx, lowBalanceText, {
                 parse_mode: 'Markdown',
                 ...lowBalanceKeyboard
             });
@@ -455,7 +484,7 @@ Please send your new X (Twitter) username without the @ symbol.
             ],
             [telegraf_1.Markup.button.callback('🔙 Back to Balance', 'my_balance')]
         ]);
-        await ctx.editMessageText(withdrawText, {
+        await safeEditMessageText(ctx, withdrawText, {
             parse_mode: 'Markdown',
             ...withdrawKeyboard
         });
@@ -480,7 +509,7 @@ Please send your new X (Twitter) username without the @ symbol.
             ],
             [telegraf_1.Markup.button.callback('🔙 Back to Balance', 'my_balance')]
         ]);
-        await ctx.editMessageText(historyText, {
+        await safeEditMessageText(ctx, historyText, {
             parse_mode: 'Markdown',
             ...historyKeyboard
         });
@@ -502,7 +531,7 @@ You haven't created any pools yet.
                 ],
                 [telegraf_1.Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]
             ]);
-            await ctx.editMessageText(noPoolsText, {
+            await safeEditMessageText(ctx, noPoolsText, {
                 parse_mode: 'Markdown',
                 ...noPoolsKeyboard
             });
@@ -533,7 +562,7 @@ ${userPools.map((pool, index) => {
             ],
             [telegraf_1.Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]
         ]);
-        await ctx.editMessageText(shareText, {
+        await safeEditMessageText(ctx, shareText, {
             parse_mode: 'Markdown',
             ...shareKeyboard
         });
@@ -555,7 +584,7 @@ There are currently no public pools to browse.
                 ],
                 [telegraf_1.Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]
             ]);
-            await ctx.editMessageText(noPoolsText, {
+            await safeEditMessageText(ctx, noPoolsText, {
                 parse_mode: 'Markdown',
                 ...noPoolsKeyboard
             });
@@ -592,7 +621,7 @@ ${trendingPools.map((pool, index) => {
             ],
             [telegraf_1.Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]
         ]);
-        await ctx.editMessageText(browseText, {
+        await safeEditMessageText(ctx, browseText, {
             parse_mode: 'Markdown',
             ...browseKeyboard
         });
