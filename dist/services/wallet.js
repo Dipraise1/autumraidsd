@@ -36,6 +36,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.WalletService = void 0;
 const web3_js_1 = require("@solana/web3.js");
 const crypto = __importStar(require("crypto"));
+const solana_1 = require("./solana");
 // Simple encryption key (in production, use proper environment variable)
 const ENCRYPTION_KEY = crypto.scryptSync('raid2earn-secret', 'salt', 32);
 // In-memory storage (replace with database in production)
@@ -112,6 +113,96 @@ class WalletService {
             return true;
         }
         return false;
+    }
+    /**
+     * Get real wallet balance from Solana blockchain
+     */
+    static async getRealWalletBalance(telegramId) {
+        const profile = userProfiles.get(telegramId);
+        if (!profile?.wallet) {
+            return 0;
+        }
+        try {
+            const balance = await solana_1.solanaService.getWalletBalance(profile.wallet.publicKey);
+            // Update local balance
+            profile.wallet.balance = balance;
+            userProfiles.set(telegramId, profile);
+            return balance;
+        }
+        catch (error) {
+            console.error('Error getting real wallet balance:', error);
+            return profile.wallet.balance; // Return cached balance
+        }
+    }
+    /**
+     * Send SOL to another wallet
+     */
+    static async sendSol(fromTelegramId, toPublicKey, amount) {
+        const profile = userProfiles.get(fromTelegramId);
+        if (!profile?.wallet) {
+            return { success: false, error: 'Wallet not found' };
+        }
+        if (profile.wallet.balance < amount) {
+            return { success: false, error: 'Insufficient balance' };
+        }
+        try {
+            const privateKey = this.decryptPrivateKey(profile.wallet.encryptedPrivateKey);
+            const result = await solana_1.solanaService.sendSol(privateKey, toPublicKey, amount);
+            if (result.success) {
+                // Update local balance
+                profile.wallet.balance -= amount;
+                userProfiles.set(fromTelegramId, profile);
+            }
+            return result;
+        }
+        catch (error) {
+            console.error('Error sending SOL:', error);
+            return { success: false, error: error.message };
+        }
+    }
+    /**
+     * Get recent transactions from blockchain
+     */
+    static async getRecentTransactions(telegramId, limit = 10) {
+        const profile = userProfiles.get(telegramId);
+        if (!profile?.wallet) {
+            return [];
+        }
+        try {
+            return await solana_1.solanaService.getRecentTransactions(profile.wallet.publicKey, limit);
+        }
+        catch (error) {
+            console.error('Error getting recent transactions:', error);
+            return [];
+        }
+    }
+    /**
+     * Verify wallet ownership
+     */
+    static async verifyWalletOwnership(telegramId, message, signature) {
+        const profile = userProfiles.get(telegramId);
+        if (!profile?.wallet) {
+            return false;
+        }
+        try {
+            return await solana_1.solanaService.verifyWalletOwnership(profile.wallet.publicKey, signature, message);
+        }
+        catch (error) {
+            console.error('Error verifying wallet ownership:', error);
+            return false;
+        }
+    }
+    /**
+     * Get network status
+     */
+    static async getNetworkStatus() {
+        try {
+            return await solana_1.solanaService.getNetworkStatus();
+        }
+        catch (error) {
+            console.error('Error getting network status:', error);
+            return { connected: false, slot: 0, blockTime: 0 };
+        }
     }
     static getAllProfiles() {
         return Array.from(userProfiles.values());
