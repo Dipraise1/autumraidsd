@@ -102,22 +102,46 @@ There are currently no active raids.
         return;
       }
 
-      const balanceText = `💳 *Your Wallet & Balance*
+      // Get real blockchain balance
+      const realBalance = await WalletService.getRealWalletBalance(userId);
+      
+      // Get recent transactions from blockchain
+      const recentTransactions = await WalletService.getRecentTransactions(userId, 5);
+      
+      // Get network status
+      const networkStatus = await WalletService.getNetworkStatus();
+      
+      let balanceText = `💳 *Your Real Blockchain Balance*
 
 *Wallet Address:*
 \`${userProfile.wallet.publicKey}\`
 
-*Balance:*
-💰 Available: ${userProfile.wallet.balance.toFixed(3)} SOL
-📊 Total Earned: ${userProfile.totalEarned.toFixed(3)} SOL
+*Live Balance:*
+💰 Available: ${realBalance.toFixed(6)} SOL
+📊 Total Earned: ${userProfile.totalEarned.toFixed(6)} SOL
 🏆 Rank: ${userProfile.rank}
 
-*Recent Activity:*
-✅ +0.005 SOL - Raid participation
-✅ +0.003 SOL - Social engagement
-⏳ Pending rewards being processed...
+*Network Status:*
+${networkStatus.connected ? '🟢 Connected' : '🔴 Disconnected'}
+${networkStatus.connected ? `📡 Slot: ${networkStatus.slot}` : ''}
+${networkStatus.connected ? `⏰ Block Time: ${new Date(networkStatus.blockTime * 1000).toLocaleString()}` : ''}
 
-*X Account:* ${userProfile.xUsername || 'Not connected'}`;
+*Recent Blockchain Transactions:*`;
+
+      if (recentTransactions.length > 0) {
+        recentTransactions.forEach((tx, index) => {
+          const emoji = tx.type === 'receive' ? '✅' : tx.type === 'send' ? '💸' : '🔄';
+          const timeAgo = Math.floor((Date.now() - tx.timestamp.getTime()) / (1000 * 60));
+          const timeUnit = timeAgo < 60 ? 'min' : 'hours';
+          const timeValue = timeAgo < 60 ? timeAgo : Math.floor(timeAgo / 60);
+          
+          balanceText += `\n${emoji} ${tx.type === 'receive' ? '+' : '-'}${tx.amount.toFixed(6)} SOL - ${tx.type} (${timeValue} ${timeUnit} ago)`;
+        });
+      } else {
+        balanceText += '\n📭 No recent transactions found';
+      }
+
+      balanceText += `\n\n*X Account:* ${userProfile.xUsername || 'Not connected'}`;
 
       const balanceKeyboard = Markup.inlineKeyboard([
         [
@@ -513,52 +537,187 @@ Please send your new X (Twitter) username without the @ symbol.
 
   // Withdraw
   bot.action('withdraw', async (ctx: Context) => {
-    const userId = ctx.from?.id.toString() || 'unknown';
-    const userProfile = WalletService.getUserProfile(userId);
-    const balance = userProfile?.wallet?.balance || 0;
-    
-    if (balance < 0.001) {
-      const lowBalanceText = `❌ *Insufficient Balance*
+    try {
+      const userId = ctx.from?.id.toString() || 'unknown';
+      const userProfile = WalletService.getUserProfile(userId);
+      
+      if (!userProfile || !userProfile.wallet) {
+        const startKeyboard = Markup.inlineKeyboard([
+          [Markup.button.callback('🚀 Start Bot', 'back_to_menu')]
+        ]);
+        
+        await safeEditMessageText(ctx, '❌ Please start the bot first to create your wallet!', startKeyboard);
+        return;
+      }
 
-*Current Balance:* ${balance.toFixed(3)} SOL
+      // Get real blockchain balance
+      const realBalance = await WalletService.getRealWalletBalance(userId);
+      
+      if (realBalance < 0.001) {
+        const lowBalanceText = `❌ *Insufficient Balance*
+
+*Current Blockchain Balance:* ${realBalance.toFixed(6)} SOL
 *Minimum Withdrawal:* 0.001 SOL
 
 *Complete more raids to earn SOL!*`;
 
-      const lowBalanceKeyboard = Markup.inlineKeyboard([
+        const lowBalanceKeyboard = Markup.inlineKeyboard([
+          [
+            Markup.button.callback('🔍 Find Raids', 'find_raids'),
+            Markup.button.callback('🔙 Back to Balance', 'my_balance')
+          ]
+        ]);
+
+        await safeEditMessageText(ctx, lowBalanceText, {
+          parse_mode: 'Markdown',
+          ...lowBalanceKeyboard
+        });
+        return;
+      }
+
+      const withdrawText = `💸 *Withdraw SOL from Blockchain*
+
+*Wallet Address:* \`${userProfile.wallet.publicKey}\`
+*Available Balance:* ${realBalance.toFixed(6)} SOL
+*Minimum Withdrawal:* 0.001 SOL
+
+*Network Fee:* ~0.000005 SOL (estimated)
+
+*Enter the recipient's Solana wallet address and amount to withdraw:*`;
+
+      const withdrawKeyboard = Markup.inlineKeyboard([
         [
-          Markup.button.callback('🔍 Find Raids', 'find_raids'),
-          Markup.button.callback('🔙 Back to Balance', 'my_balance')
+          Markup.button.callback('💸 Withdraw All', 'withdraw_all'),
+          Markup.button.callback('💰 Custom Amount', 'custom_withdraw')
+        ],
+        [
+          Markup.button.callback('📊 Check Balance', 'my_balance'),
+          Markup.button.callback('🔙 Back to Menu', 'back_to_menu')
         ]
       ]);
 
-      await safeEditMessageText(ctx, lowBalanceText, {
+      await safeEditMessageText(ctx, withdrawText, {
         parse_mode: 'Markdown',
-        ...lowBalanceKeyboard
+        ...withdrawKeyboard
       });
-      return;
+    } catch (error) {
+      console.error('Error in withdraw action:', error);
+      await ctx.answerCbQuery('❌ Error loading withdrawal options');
     }
+  });
 
-    const withdrawText = `💸 *Withdraw SOL*
+  // Withdraw all
+  bot.action('withdraw_all', async (ctx: Context) => {
+    try {
+      const userId = ctx.from?.id.toString() || 'unknown';
+      const userProfile = WalletService.getUserProfile(userId);
+      
+      if (!userProfile || !userProfile.wallet) {
+        await ctx.answerCbQuery('❌ Wallet not found');
+        return;
+      }
 
-*Available Balance:* ${balance.toFixed(3)} SOL
-*Minimum Withdrawal:* 0.001 SOL
-*Network Fee:* 0.000005 SOL
+      const realBalance = await WalletService.getRealWalletBalance(userId);
+      
+      if (realBalance < 0.001) {
+        await ctx.answerCbQuery('❌ Insufficient balance for withdrawal');
+        return;
+      }
 
-*Enter withdrawal amount (in SOL):*`;
+      // For now, show withdrawal form (implement actual withdrawal later)
+      const withdrawFormText = `💸 *Withdraw All SOL*
 
-    const withdrawKeyboard = Markup.inlineKeyboard([
-      [
-        Markup.button.callback('💸 Withdraw All', 'withdraw_all'),
-        Markup.button.callback('💰 Custom Amount', 'custom_withdraw')
-      ],
-      [Markup.button.callback('🔙 Back to Balance', 'my_balance')]
-    ]);
+*Amount:* ${realBalance.toFixed(6)} SOL
+*Network Fee:* ~0.000005 SOL
+*You'll Receive:* ${(realBalance - 0.000005).toFixed(6)} SOL
 
-    await safeEditMessageText(ctx, withdrawText, {
-      parse_mode: 'Markdown',
-      ...withdrawKeyboard
-    });
+*Enter recipient wallet address:*`;
+
+      const withdrawFormKeyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('❌ Cancel', 'withdraw')],
+        [Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]
+      ]);
+
+      await safeEditMessageText(ctx, withdrawFormText, {
+        parse_mode: 'Markdown',
+        ...withdrawFormKeyboard
+      });
+
+      // Set user session for withdrawal
+      userSessions.set(userId, { 
+        withdrawing: true, 
+        amount: realBalance,
+        type: 'withdraw_all'
+      });
+    } catch (error) {
+      console.error('Error in withdraw_all:', error);
+      await ctx.answerCbQuery('❌ Error processing withdrawal');
+    }
+  });
+
+  // Custom withdrawal
+  bot.action('custom_withdraw', async (ctx: Context) => {
+    try {
+      const userId = ctx.from?.id.toString() || 'unknown';
+      const userProfile = WalletService.getUserProfile(userId);
+      
+      if (!userProfile || !userProfile.wallet) {
+        await ctx.answerCbQuery('❌ Wallet not found');
+        return;
+      }
+
+      const realBalance = await WalletService.getRealWalletBalance(userId);
+      
+      const customWithdrawText = `💰 *Custom Withdrawal*
+
+*Available Balance:* ${realBalance.toFixed(6)} SOL
+*Minimum:* 0.001 SOL
+*Maximum:* ${realBalance.toFixed(6)} SOL
+
+*Enter amount to withdraw (in SOL):*`;
+
+      const customWithdrawKeyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('❌ Cancel', 'withdraw')],
+        [Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]
+      ]);
+
+      await safeEditMessageText(ctx, customWithdrawText, {
+        parse_mode: 'Markdown',
+        ...customWithdrawKeyboard
+      });
+
+      // Set user session for custom withdrawal
+      userSessions.set(userId, { 
+        withdrawing: true, 
+        type: 'custom_withdraw'
+      });
+    } catch (error) {
+      console.error('Error in custom_withdraw:', error);
+      await ctx.answerCbQuery('❌ Error processing withdrawal');
+    }
+  });
+
+  // Refresh balance
+  bot.action('refresh_balance', async (ctx: Context) => {
+    try {
+      const userId = ctx.from?.id.toString() || 'unknown';
+      const userProfile = WalletService.getUserProfile(userId);
+      
+      if (!userProfile || !userProfile.wallet) {
+        await ctx.answerCbQuery('❌ Wallet not found');
+        return;
+      }
+
+      // Force refresh from blockchain
+      const realBalance = await WalletService.getRealWalletBalance(userId);
+      
+      await ctx.answerCbQuery(`✅ Balance refreshed: ${realBalance.toFixed(6)} SOL`);
+      
+      // Balance has been refreshed, user can check again if needed
+    } catch (error) {
+      console.error('Error in refresh_balance:', error);
+      await ctx.answerCbQuery('❌ Error refreshing balance');
+    }
   });
 
   // History

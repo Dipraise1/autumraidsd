@@ -90,22 +90,41 @@ There are currently no active raids.
                 await safeEditMessageText(ctx, '❌ Please start the bot first to create your wallet!', startKeyboard);
                 return;
             }
-            const balanceText = `💳 *Your Wallet & Balance*
+            // Get real blockchain balance
+            const realBalance = await wallet_1.WalletService.getRealWalletBalance(userId);
+            // Get recent transactions from blockchain
+            const recentTransactions = await wallet_1.WalletService.getRecentTransactions(userId, 5);
+            // Get network status
+            const networkStatus = await wallet_1.WalletService.getNetworkStatus();
+            let balanceText = `💳 *Your Real Blockchain Balance*
 
 *Wallet Address:*
 \`${userProfile.wallet.publicKey}\`
 
-*Balance:*
-💰 Available: ${userProfile.wallet.balance.toFixed(3)} SOL
-📊 Total Earned: ${userProfile.totalEarned.toFixed(3)} SOL
+*Live Balance:*
+💰 Available: ${realBalance.toFixed(6)} SOL
+📊 Total Earned: ${userProfile.totalEarned.toFixed(6)} SOL
 🏆 Rank: ${userProfile.rank}
 
-*Recent Activity:*
-✅ +0.005 SOL - Raid participation
-✅ +0.003 SOL - Social engagement
-⏳ Pending rewards being processed...
+*Network Status:*
+${networkStatus.connected ? '🟢 Connected' : '🔴 Disconnected'}
+${networkStatus.connected ? `📡 Slot: ${networkStatus.slot}` : ''}
+${networkStatus.connected ? `⏰ Block Time: ${new Date(networkStatus.blockTime * 1000).toLocaleString()}` : ''}
 
-*X Account:* ${userProfile.xUsername || 'Not connected'}`;
+*Recent Blockchain Transactions:*`;
+            if (recentTransactions.length > 0) {
+                recentTransactions.forEach((tx, index) => {
+                    const emoji = tx.type === 'receive' ? '✅' : tx.type === 'send' ? '💸' : '🔄';
+                    const timeAgo = Math.floor((Date.now() - tx.timestamp.getTime()) / (1000 * 60));
+                    const timeUnit = timeAgo < 60 ? 'min' : 'hours';
+                    const timeValue = timeAgo < 60 ? timeAgo : Math.floor(timeAgo / 60);
+                    balanceText += `\n${emoji} ${tx.type === 'receive' ? '+' : '-'}${tx.amount.toFixed(6)} SOL - ${tx.type} (${timeValue} ${timeUnit} ago)`;
+                });
+            }
+            else {
+                balanceText += '\n📭 No recent transactions found';
+            }
+            balanceText += `\n\n*X Account:* ${userProfile.xUsername || 'Not connected'}`;
             const balanceKeyboard = telegraf_1.Markup.inlineKeyboard([
                 [
                     telegraf_1.Markup.button.callback('💸 Withdraw', 'withdraw'),
@@ -448,46 +467,162 @@ Please send your new X (Twitter) username without the @ symbol.
     });
     // Withdraw
     bot.action('withdraw', async (ctx) => {
-        const userId = ctx.from?.id.toString() || 'unknown';
-        const userProfile = wallet_1.WalletService.getUserProfile(userId);
-        const balance = userProfile?.wallet?.balance || 0;
-        if (balance < 0.001) {
-            const lowBalanceText = `❌ *Insufficient Balance*
+        try {
+            const userId = ctx.from?.id.toString() || 'unknown';
+            const userProfile = wallet_1.WalletService.getUserProfile(userId);
+            if (!userProfile || !userProfile.wallet) {
+                const startKeyboard = telegraf_1.Markup.inlineKeyboard([
+                    [telegraf_1.Markup.button.callback('🚀 Start Bot', 'back_to_menu')]
+                ]);
+                await safeEditMessageText(ctx, '❌ Please start the bot first to create your wallet!', startKeyboard);
+                return;
+            }
+            // Get real blockchain balance
+            const realBalance = await wallet_1.WalletService.getRealWalletBalance(userId);
+            if (realBalance < 0.001) {
+                const lowBalanceText = `❌ *Insufficient Balance*
 
-*Current Balance:* ${balance.toFixed(3)} SOL
+*Current Blockchain Balance:* ${realBalance.toFixed(6)} SOL
 *Minimum Withdrawal:* 0.001 SOL
 
 *Complete more raids to earn SOL!*`;
-            const lowBalanceKeyboard = telegraf_1.Markup.inlineKeyboard([
+                const lowBalanceKeyboard = telegraf_1.Markup.inlineKeyboard([
+                    [
+                        telegraf_1.Markup.button.callback('🔍 Find Raids', 'find_raids'),
+                        telegraf_1.Markup.button.callback('🔙 Back to Balance', 'my_balance')
+                    ]
+                ]);
+                await safeEditMessageText(ctx, lowBalanceText, {
+                    parse_mode: 'Markdown',
+                    ...lowBalanceKeyboard
+                });
+                return;
+            }
+            const withdrawText = `💸 *Withdraw SOL from Blockchain*
+
+*Wallet Address:* \`${userProfile.wallet.publicKey}\`
+*Available Balance:* ${realBalance.toFixed(6)} SOL
+*Minimum Withdrawal:* 0.001 SOL
+
+*Network Fee:* ~0.000005 SOL (estimated)
+
+*Enter the recipient's Solana wallet address and amount to withdraw:*`;
+            const withdrawKeyboard = telegraf_1.Markup.inlineKeyboard([
                 [
-                    telegraf_1.Markup.button.callback('🔍 Find Raids', 'find_raids'),
-                    telegraf_1.Markup.button.callback('🔙 Back to Balance', 'my_balance')
+                    telegraf_1.Markup.button.callback('💸 Withdraw All', 'withdraw_all'),
+                    telegraf_1.Markup.button.callback('💰 Custom Amount', 'custom_withdraw')
+                ],
+                [
+                    telegraf_1.Markup.button.callback('📊 Check Balance', 'my_balance'),
+                    telegraf_1.Markup.button.callback('🔙 Back to Menu', 'back_to_menu')
                 ]
             ]);
-            await safeEditMessageText(ctx, lowBalanceText, {
+            await safeEditMessageText(ctx, withdrawText, {
                 parse_mode: 'Markdown',
-                ...lowBalanceKeyboard
+                ...withdrawKeyboard
             });
-            return;
         }
-        const withdrawText = `💸 *Withdraw SOL*
+        catch (error) {
+            console.error('Error in withdraw action:', error);
+            await ctx.answerCbQuery('❌ Error loading withdrawal options');
+        }
+    });
+    // Withdraw all
+    bot.action('withdraw_all', async (ctx) => {
+        try {
+            const userId = ctx.from?.id.toString() || 'unknown';
+            const userProfile = wallet_1.WalletService.getUserProfile(userId);
+            if (!userProfile || !userProfile.wallet) {
+                await ctx.answerCbQuery('❌ Wallet not found');
+                return;
+            }
+            const realBalance = await wallet_1.WalletService.getRealWalletBalance(userId);
+            if (realBalance < 0.001) {
+                await ctx.answerCbQuery('❌ Insufficient balance for withdrawal');
+                return;
+            }
+            // For now, show withdrawal form (implement actual withdrawal later)
+            const withdrawFormText = `💸 *Withdraw All SOL*
 
-*Available Balance:* ${balance.toFixed(3)} SOL
-*Minimum Withdrawal:* 0.001 SOL
-*Network Fee:* 0.000005 SOL
+*Amount:* ${realBalance.toFixed(6)} SOL
+*Network Fee:* ~0.000005 SOL
+*You'll Receive:* ${(realBalance - 0.000005).toFixed(6)} SOL
 
-*Enter withdrawal amount (in SOL):*`;
-        const withdrawKeyboard = telegraf_1.Markup.inlineKeyboard([
-            [
-                telegraf_1.Markup.button.callback('💸 Withdraw All', 'withdraw_all'),
-                telegraf_1.Markup.button.callback('💰 Custom Amount', 'custom_withdraw')
-            ],
-            [telegraf_1.Markup.button.callback('🔙 Back to Balance', 'my_balance')]
-        ]);
-        await safeEditMessageText(ctx, withdrawText, {
-            parse_mode: 'Markdown',
-            ...withdrawKeyboard
-        });
+*Enter recipient wallet address:*`;
+            const withdrawFormKeyboard = telegraf_1.Markup.inlineKeyboard([
+                [telegraf_1.Markup.button.callback('❌ Cancel', 'withdraw')],
+                [telegraf_1.Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]
+            ]);
+            await safeEditMessageText(ctx, withdrawFormText, {
+                parse_mode: 'Markdown',
+                ...withdrawFormKeyboard
+            });
+            // Set user session for withdrawal
+            userSessions.set(userId, {
+                withdrawing: true,
+                amount: realBalance,
+                type: 'withdraw_all'
+            });
+        }
+        catch (error) {
+            console.error('Error in withdraw_all:', error);
+            await ctx.answerCbQuery('❌ Error processing withdrawal');
+        }
+    });
+    // Custom withdrawal
+    bot.action('custom_withdraw', async (ctx) => {
+        try {
+            const userId = ctx.from?.id.toString() || 'unknown';
+            const userProfile = wallet_1.WalletService.getUserProfile(userId);
+            if (!userProfile || !userProfile.wallet) {
+                await ctx.answerCbQuery('❌ Wallet not found');
+                return;
+            }
+            const realBalance = await wallet_1.WalletService.getRealWalletBalance(userId);
+            const customWithdrawText = `💰 *Custom Withdrawal*
+
+*Available Balance:* ${realBalance.toFixed(6)} SOL
+*Minimum:* 0.001 SOL
+*Maximum:* ${realBalance.toFixed(6)} SOL
+
+*Enter amount to withdraw (in SOL):*`;
+            const customWithdrawKeyboard = telegraf_1.Markup.inlineKeyboard([
+                [telegraf_1.Markup.button.callback('❌ Cancel', 'withdraw')],
+                [telegraf_1.Markup.button.callback('🔙 Back to Menu', 'back_to_menu')]
+            ]);
+            await safeEditMessageText(ctx, customWithdrawText, {
+                parse_mode: 'Markdown',
+                ...customWithdrawKeyboard
+            });
+            // Set user session for custom withdrawal
+            userSessions.set(userId, {
+                withdrawing: true,
+                type: 'custom_withdraw'
+            });
+        }
+        catch (error) {
+            console.error('Error in custom_withdraw:', error);
+            await ctx.answerCbQuery('❌ Error processing withdrawal');
+        }
+    });
+    // Refresh balance
+    bot.action('refresh_balance', async (ctx) => {
+        try {
+            const userId = ctx.from?.id.toString() || 'unknown';
+            const userProfile = wallet_1.WalletService.getUserProfile(userId);
+            if (!userProfile || !userProfile.wallet) {
+                await ctx.answerCbQuery('❌ Wallet not found');
+                return;
+            }
+            // Force refresh from blockchain
+            const realBalance = await wallet_1.WalletService.getRealWalletBalance(userId);
+            await ctx.answerCbQuery(`✅ Balance refreshed: ${realBalance.toFixed(6)} SOL`);
+            // Balance has been refreshed, user can check again if needed
+        }
+        catch (error) {
+            console.error('Error in refresh_balance:', error);
+            await ctx.answerCbQuery('❌ Error refreshing balance');
+        }
     });
     // History
     bot.action('history', async (ctx) => {
