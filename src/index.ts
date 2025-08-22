@@ -3,6 +3,7 @@ import dotenv from 'dotenv';
 import { startCommand } from './commands/start';
 import { sharePoolCommand } from './commands/sharePool';
 import { browsePoolsCommand } from './commands/browsePools';
+import { verifyUsernameCommand } from './commands/verifyUsername';
 import { handleCallbackQueries, handleTextMessages } from './handlers';
 
 // Load environment variables
@@ -16,6 +17,9 @@ bot.start(startCommand);
 // Register pool commands
 bot.command('sharepool', sharePoolCommand);
 bot.command('browsepools', browsePoolsCommand);
+
+// Register verification commands
+bot.command('verify', verifyUsernameCommand);
 
 // Register handlers
 handleCallbackQueries(bot);
