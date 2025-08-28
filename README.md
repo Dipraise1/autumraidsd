@@ -1,110 +1,125 @@
-# Raid2Earn Telegram Bot
+# Raid2Earn Bot
 
-A simple, modern Telegram bot for the Raid2Earn platform. Users can earn SOL by participating in social media campaigns on Twitter/X.
+A Telegram bot for Raid2Earn with Solana blockchain integration and Twitter verification.
 
-## 🚀 Features
+## Features
 
-- **Auto Wallet Creation** - Solana wallet generated for each user
-- **X Username Collection** - Link your Twitter/X account for tracking
-- **Username Verification** - Verify Twitter usernames exist before raids
-- **Public Pool Creation** - Create and share raid campaigns publicly
-- **Group Integration** - Share pools in Telegram groups and channels
-- **Pool Discovery** - Browse trending and public pools
-- **Modern Button UI** - No slash commands, just clean buttons
-- **Find Raids** - Browse available campaigns
-- **Track Balance** - Monitor your SOL earnings and wallet
-- **User Profiles** - Complete stats and earnings tracking
-- **Simple Navigation** - Intuitive menu system
+- **Telegram Bot Integration**: Full bot functionality with commands and handlers
+- **Solana Blockchain**: Wallet management, transactions, and blockchain operations
+- **Twitter Verification (2025 Compliant)**: Username verification and OAuth authentication
+- **Pool Management**: Create and manage reward pools
+- **Reward System**: Distribute rewards based on verified actions
 
-## 🛠️ Setup
+## Twitter Integration (2025 Compliant)
 
-1. **Install dependencies:**
-   ```bash
-   npm install
-   ```
+The bot includes a fully updated Twitter service that's compliant with Twitter's 2025 API requirements.
 
-2. **Set up environment:**
-   ```bash
-   cp env.example .env
-   # Edit .env with your bot token and Twitter API credentials
-   ```
+### Features
 
-3. **Get bot token:**
-   - Message @BotFather on Telegram
-   - Create new bot with `/newbot`
-   - Copy the token to `.env`
+- **Username Verification**: Verify Twitter usernames exist using Twitter API v2
+- **OAuth Authentication**: Full OAuth 2.0 flow for user authentication
+- **Action Verification**: Verify tweets, retweets, likes, follows, replies, and quotes
+- **Rate Limiting**: Built-in rate limit handling and optimization
+- **Batch Processing**: Verify multiple usernames efficiently
+- **Error Handling**: Comprehensive error handling with detailed error messages
 
-4. **Set up Twitter API (2025):**
-   - Follow the [Twitter Setup Guide](TWITTER_SETUP_2025.md)
-   - Get your API keys and Bearer Token
-   - Add them to your `.env` file
+### API Endpoints Used
 
-5. **Run the bot:**
-   ```bash
-   # Development
-   npm run dev
-   
-   # Production
-   npm run build
-   npm start
-   ```
+- `GET /2/users/by/username/{username}` - Username verification
+- `GET /2/users/me` - User profile information
+- `GET /2/users/me/tweets` - User's tweets
+- `GET /2/users/me/retweeted` - User's retweets
+- `GET /2/users/me/liked_tweets` - User's liked tweets
+- `GET /2/users/me/following` - User's following list
+- `POST /2/oauth2/token` - OAuth token exchange
 
-## 📱 Bot Commands
+### Required Scopes
 
-- `/start` - Main menu (only command needed)
-- `/verify username` - Verify Twitter username exists
-- `/sharepool` - Share your pools with groups
-- `/browsepools` - Discover public pools
+- `tweet.read` - Read user's tweets
+- `users.read` - Read user profile information
+- `follows.read` - Read user's following list
+- `like.read` - Read user's liked tweets
+- `offline.access` - Refresh token access
 
-## 🎯 UI Design
-
-- **Clean buttons** instead of text commands
-- **Emoji icons** for visual appeal
-- **Markdown formatting** for better readability
-- **Intuitive navigation** with back buttons
-- **Modern 2025 style** interface
-
-## 🔧 Development
+### Environment Variables
 
 ```bash
-npm run dev      # Start with hot reload
-npm run build    # Build for production
-npm start        # Run production build
-npm run clean    # Clean build files
+# Twitter API Configuration (2025)
+TWITTER_CLIENT_ID=your_twitter_client_id_here
+TWITTER_CLIENT_SECRET=your_twitter_client_secret_here
+TWITTER_BEARER_TOKEN=your_twitter_bearer_token_here
+TWITTER_REDIRECT_URI=https://your-domain.com/auth/twitter/callback
 ```
 
-## 📋 TODO
+### Usage Examples
 
-- [x] Add Solana wallet generation for users
-- [x] Collect X (Twitter) usernames for tracking
-- [x] **NEW: Username verification system**
-- [x] Create user profile system
-- [x] Display wallet addresses and balances
-- [x] Public pool creation functionality
-- [x] Group sharing and pool discovery
-- [x] Pool management and analytics
-- [x] **NEW: Twitter API integration for 2025**
-- [ ] Implement automated reward distribution
-- [ ] Add admin panel for pool management
-- [ ] Add real Solana blockchain integration
-- [ ] Add withdrawal functionality
+```typescript
+import { twitterService } from './dist/services/twitter.js';
 
-## 🐦 Twitter Integration (2025)
+// Verify a single username
+const result = await twitterService.verifyUsername('elonmusk');
+if (result.success && result.exists) {
+  console.log(`User exists: ${result.user?.displayName}`);
+}
 
-The bot now includes comprehensive Twitter/X integration:
+// Verify multiple usernames
+const usernames = ['elonmusk', 'twitter', 'github'];
+const results = await twitterService.verifyMultipleUsernames(usernames);
 
-- **Username Verification**: Verify usernames exist before raids
-- **OAuth 2.0 Flow**: Secure user authentication
-- **Action Verification**: Verify raid completion (tweets, likes, follows)
-- **Rate Limit Handling**: Respects Twitter's API limits
-- **Public API Access**: Uses Bearer Token for username checks
+// Generate OAuth URL
+const authData = twitterService.generateAuthUrl('user-123');
+console.log(`OAuth URL: ${authData.url}`);
 
-See [TWITTER_SETUP_2025.md](TWITTER_SETUP_2025.md) for complete setup instructions.
+// Check service status
+const status = twitterService.getServiceStatus();
+console.log(`API Version: ${status.apiVersion}`);
+```
 
-## 🔒 Security Features
+### Testing
 
-- **OAuth 2.0 with PKCE**: Modern authentication flow
-- **Rate Limiting**: Prevents API abuse
-- **Input Validation**: Sanitizes all user inputs
-- **Error Handling**: Graceful failure handling
-- **Environment Variables**: Secure credential management
+Run the Twitter integration tests:
+
+```bash
+npm run test:twitter
+```
+
+This will test:
+- Environment variable configuration
+- Username verification
+- OAuth URL generation
+- Service configuration validation
+
+## Installation
+
+1. Clone the repository
+2. Install dependencies: `npm install`
+3. Copy `env.example` to `.env` and configure your credentials
+4. Build the project: `npm run build`
+5. Start the bot: `npm start`
+
+## Development
+
+- **Build**: `npm run build`
+- **Dev Mode**: `npm run dev`
+- **Clean**: `npm run clean`
+
+## Architecture
+
+The bot is built with TypeScript and follows a modular architecture:
+
+- **Commands**: Bot command handlers
+- **Services**: Business logic services (Twitter, Solana, etc.)
+- **Handlers**: Event handlers and middleware
+- **Types**: TypeScript type definitions
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Submit a pull request
+
+## License
+
+MIT License - see LICENSE file for details.

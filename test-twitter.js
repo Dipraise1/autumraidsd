@@ -6,7 +6,7 @@
  */
 
 import dotenv from 'dotenv';
-import { twitterService } from './src/services/twitter.js';
+import { twitterService } from './dist/services/twitter.js';
 
 // Load environment variables
 dotenv.config();
@@ -43,8 +43,8 @@ async function testTwitterIntegration() {
       const result = await twitterService.verifyUsername(username);
       
       if (result.success) {
-        if (result.exists) {
-          const user = result.user!;
+        if (result.exists && result.user) {
+          const user = result.user;
           console.log(`✅ Username exists:`);
           console.log(`   Display Name: ${user.displayName}`);
           console.log(`   Verified: ${user.verified ? 'Yes' : 'No'}`);

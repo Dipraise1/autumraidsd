@@ -6,6 +6,7 @@ export interface TwitterConfig {
   redirectUri: string;
   scopes: string[];
   bearerToken?: string; // For public API access
+  apiVersion?: string; // Twitter API version
 }
 
 export interface TwitterUser {
@@ -19,6 +20,9 @@ export interface TwitterUser {
   tweetCount: number;
   createdAt: string;
   description: string;
+  location?: string;
+  url?: string;
+  protected?: boolean;
 }
 
 export interface TwitterAction {
@@ -43,42 +47,72 @@ export interface UsernameVerificationResult {
   exists: boolean;
   user?: TwitterUser;
   error?: string;
+  rateLimitInfo?: {
+    remaining: number;
+    reset: number;
+    limit: number;
+  };
+}
+
+export interface TwitterAPIError {
+  code: number;
+  title: string;
+  detail: string;
+  type: string;
 }
 
 export class TwitterService {
   private config: TwitterConfig;
   private oauthStates: Map<string, OAuthState> = new Map();
+  private apiBase = 'https://api.twitter.com/2';
+  private apiVersion: string;
 
   constructor(config: TwitterConfig) {
     this.config = config;
+    this.apiVersion = config.apiVersion || '2';
+    this.apiBase = `https://api.twitter.com/${this.apiVersion}`;
   }
 
   /**
-   * Verify username exists without OAuth (public API)
-   * This is the main method for 2025 username verification
+   * Verify username exists using Twitter API v2 (2025 compliant)
+   * This is the main method for username verification
    */
   async verifyUsername(username: string): Promise<UsernameVerificationResult> {
     try {
-      // Remove @ if present
-      const cleanUsername = username.replace('@', '');
+      // Remove @ if present and clean username
+      const cleanUsername = username.replace('@', '').trim();
       
-      // Use Twitter's public API to check if username exists
-      const response = await fetch(`https://api.twitter.com/2/users/by/username/${cleanUsername}`, {
+      if (!cleanUsername) {
+        return {
+          success: false,
+          exists: false,
+          error: 'Invalid username provided',
+        };
+      }
+
+      // Use Twitter API v2 to check if username exists
+      const response = await fetch(`${this.apiBase}/users/by/username/${cleanUsername}?user.fields=profile_image_url,verified,public_metrics,created_at,description,location,url,protected`, {
         headers: {
           'Authorization': `Bearer ${this.config.bearerToken}`,
-          'User-Agent': 'Raid2Earn Bot/1.0',
+          'User-Agent': 'Raid2Earn Bot/2.0',
+          'Accept': 'application/json',
         },
       });
+
+      // Extract rate limit information
+      const rateLimitInfo = this.extractRateLimitInfo(response.headers);
 
       if (response.status === 404) {
         return {
           success: true,
           exists: false,
+          rateLimitInfo,
         };
       }
 
       if (!response.ok) {
-        throw new Error(`Twitter API error: ${response.status} ${response.statusText}`);
+        const errorData = await this.parseErrorResponse(response);
+        throw new Error(`Twitter API error: ${errorData.detail || response.statusText}`);
       }
 
       const data = await response.json();
@@ -87,62 +121,34 @@ export class TwitterService {
         return {
           success: true,
           exists: false,
+          rateLimitInfo,
         };
       }
 
       const user = data.data;
-      
-      // Get additional user fields
-      const userResponse = await fetch(
-        `https://api.twitter.com/2/users/by/username/${cleanUsername}?user.fields=profile_image_url,verified,public_metrics,created_at,description`,
-        {
-          headers: {
-            'Authorization': `Bearer ${this.config.bearerToken}`,
-            'User-Agent': 'Raid2Earn Bot/1.0',
-          },
-        }
-      );
+      const metrics = user.public_metrics || {};
 
-      if (userResponse.ok) {
-        const userData = await userResponse.json();
-        const userInfo = userData.data;
-        const metrics = userInfo.public_metrics;
-
-        const twitterUser: TwitterUser = {
-          id: userInfo.id,
-          username: userInfo.username,
-          displayName: userInfo.name,
-          profileImageUrl: userInfo.profile_image_url || '',
-          verified: userInfo.verified || false,
-          followersCount: metrics?.followers_count || 0,
-          followingCount: metrics?.following_count || 0,
-          tweetCount: metrics?.tweet_count || 0,
-          createdAt: userInfo.created_at || '',
-          description: userInfo.description || '',
-        };
-
-        return {
-          success: true,
-          exists: true,
-          user: twitterUser,
-        };
-      }
+      const twitterUser: TwitterUser = {
+        id: user.id,
+        username: user.username,
+        displayName: user.name,
+        profileImageUrl: user.profile_image_url || '',
+        verified: user.verified || false,
+        followersCount: metrics.followers_count || 0,
+        followingCount: metrics.following_count || 0,
+        tweetCount: metrics.tweet_count || 0,
+        createdAt: user.created_at || '',
+        description: user.description || '',
+        location: user.location || undefined,
+        url: user.url || undefined,
+        protected: user.protected || false,
+      };
 
       return {
         success: true,
         exists: true,
-        user: {
-          id: user.id,
-          username: user.username,
-          displayName: user.name,
-          profileImageUrl: '',
-          verified: false,
-          followersCount: 0,
-          followingCount: 0,
-          tweetCount: 0,
-          createdAt: '',
-          description: '',
-        },
+        user: twitterUser,
+        rateLimitInfo,
       };
     } catch (error: any) {
       console.error('Error verifying username:', error);
@@ -155,13 +161,13 @@ export class TwitterService {
   }
 
   /**
-   * Verify multiple usernames at once (for batch verification)
+   * Verify multiple usernames at once with improved rate limiting (2025)
    */
   async verifyMultipleUsernames(usernames: string[]): Promise<Map<string, UsernameVerificationResult>> {
     const results = new Map<string, UsernameVerificationResult>();
     
-    // Process in batches to avoid rate limiting
-    const batchSize = 100;
+    // Process in smaller batches to respect 2025 rate limits
+    const batchSize = 50; // Reduced from 100 for better rate limit compliance
     for (let i = 0; i < usernames.length; i += batchSize) {
       const batch = usernames.slice(i, i + batchSize);
       
@@ -176,9 +182,9 @@ export class TwitterService {
         results.set(username, result);
       });
       
-      // Add delay between batches to respect rate limits
+      // Add delay between batches to respect 2025 rate limits
       if (i + batchSize < usernames.length) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Increased delay
       }
     }
     
@@ -186,8 +192,7 @@ export class TwitterService {
   }
 
   /**
-   * Generate OAuth authorization URL for full access
-   * This is for users who want to verify their own actions
+   * Generate OAuth authorization URL for full access (2025 compliant)
    */
   generateAuthUrl(userId: string): { url: string; state: string; codeVerifier: string } {
     const state = this.generateRandomString(32);
@@ -218,7 +223,7 @@ export class TwitterService {
   }
 
   /**
-   * Exchange authorization code for access token
+   * Exchange authorization code for access token (2025 compliant)
    */
   async exchangeCodeForToken(
     code: string,
@@ -231,17 +236,18 @@ export class TwitterService {
         return { success: false, error: 'Invalid code verifier' };
       }
 
-      // Check if state is expired
-      if (Date.now() - oauthState.timestamp > 10 * 60 * 1000) { // 10 minutes
+      // Check if state is expired (reduced to 5 minutes for 2025 security)
+      if (Date.now() - oauthState.timestamp > 5 * 60 * 1000) {
         this.oauthStates.delete(userId);
         return { success: false, error: 'OAuth state expired' };
       }
 
-      const tokenResponse = await fetch('https://api.twitter.com/2/oauth2/token', {
+      const tokenResponse = await fetch(`${this.apiBase}/oauth2/token`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/x-www-form-urlencoded',
           'Authorization': `Basic ${Buffer.from(`${this.config.clientId}:${this.config.clientSecret}`).toString('base64')}`,
+          'User-Agent': 'Raid2Earn Bot/2.0',
         },
         body: new URLSearchParams({
           grant_type: 'authorization_code',
@@ -252,8 +258,8 @@ export class TwitterService {
       });
 
       if (!tokenResponse.ok) {
-        const errorData = await tokenResponse.json();
-        throw new Error(`Token exchange failed: ${errorData.error || tokenResponse.statusText}`);
+        const errorData = await this.parseErrorResponse(tokenResponse);
+        throw new Error(`Token exchange failed: ${errorData.detail || tokenResponse.statusText}`);
       }
 
       const tokenData = await tokenResponse.json();
@@ -273,27 +279,29 @@ export class TwitterService {
   }
 
   /**
-   * Get Twitter user profile with OAuth access
+   * Get Twitter user profile with OAuth access (2025 compliant)
    */
   async getUserProfile(accessToken: string): Promise<{ success: boolean; user?: TwitterUser; error?: string }> {
     try {
       const response = await fetch(
-        'https://api.twitter.com/2/users/me?user.fields=profile_image_url,verified,public_metrics,created_at,description',
+        `${this.apiBase}/users/me?user.fields=profile_image_url,verified,public_metrics,created_at,description,location,url,protected`,
         {
           headers: {
             'Authorization': `Bearer ${accessToken}`,
-            'User-Agent': 'Raid2Earn Bot/1.0',
+            'User-Agent': 'Raid2Earn Bot/2.0',
+            'Accept': 'application/json',
           },
         }
       );
 
       if (!response.ok) {
-        throw new Error(`Twitter API error: ${response.status} ${response.statusText}`);
+        const errorData = await this.parseErrorResponse(response);
+        throw new Error(`Twitter API error: ${errorData.detail || response.statusText}`);
       }
 
       const data = await response.json();
       const user = data.data;
-      const metrics = user.public_metrics;
+      const metrics = user.public_metrics || {};
 
       const twitterUser: TwitterUser = {
         id: user.id,
@@ -301,11 +309,14 @@ export class TwitterService {
         displayName: user.name,
         profileImageUrl: user.profile_image_url || '',
         verified: user.verified || false,
-        followersCount: metrics?.followers_count || 0,
-        followingCount: metrics?.following_count || 0,
-        tweetCount: metrics?.tweet_count || 0,
+        followersCount: metrics.followers_count || 0,
+        followingCount: metrics.following_count || 0,
+        tweetCount: metrics.tweet_count || 0,
         createdAt: user.created_at || '',
         description: user.description || '',
+        location: user.location || undefined,
+        url: user.url || undefined,
+        protected: user.protected || false,
       };
 
       return { success: true, user: twitterUser };
@@ -316,7 +327,7 @@ export class TwitterService {
   }
 
   /**
-   * Verify user action (tweet, retweet, like, follow) with OAuth access
+   * Verify user action with improved 2025 API endpoints
    */
   async verifyAction(
     accessToken: string,
@@ -346,7 +357,7 @@ export class TwitterService {
   }
 
   /**
-   * Verify tweet action
+   * Verify tweet action with 2025 API improvements
    */
   private async verifyTweet(
     accessToken: string,
@@ -354,17 +365,19 @@ export class TwitterService {
   ): Promise<{ success: boolean; verified: boolean; error?: string }> {
     try {
       const response = await fetch(
-        `https://api.twitter.com/2/users/me/tweets?max_results=100&tweet.fields=created_at,text`,
+        `${this.apiBase}/users/me/tweets?max_results=100&tweet.fields=created_at,text,context_annotations`,
         {
           headers: {
             'Authorization': `Bearer ${accessToken}`,
-            'User-Agent': 'Raid2Earn Bot/1.0',
+            'User-Agent': 'Raid2Earn Bot/2.0',
+            'Accept': 'application/json',
           },
         }
       );
 
       if (!response.ok) {
-        throw new Error(`Twitter API error: ${response.status}`);
+        const errorData = await this.parseErrorResponse(response);
+        throw new Error(`Twitter API error: ${errorData.detail || response.statusText}`);
       }
 
       const data = await response.json();
@@ -390,7 +403,7 @@ export class TwitterService {
   }
 
   /**
-   * Verify retweet action
+   * Verify retweet action with 2025 API improvements
    */
   private async verifyRetweet(
     accessToken: string,
@@ -398,17 +411,19 @@ export class TwitterService {
   ): Promise<{ success: boolean; verified: boolean; error?: string }> {
     try {
       const response = await fetch(
-        `https://api.twitter.com/2/users/me/retweeted?max_results=100&tweet.fields=created_at`,
+        `${this.apiBase}/users/me/retweeted?max_results=100&tweet.fields=created_at`,
         {
           headers: {
             'Authorization': `Bearer ${accessToken}`,
-            'User-Agent': 'Raid2Earn Bot/1.0',
+            'User-Agent': 'Raid2Earn Bot/2.0',
+            'Accept': 'application/json',
           },
         }
       );
 
       if (!response.ok) {
-        throw new Error(`Twitter API error: ${response.status}`);
+        const errorData = await this.parseErrorResponse(response);
+        throw new Error(`Twitter API error: ${errorData.detail || response.statusText}`);
       }
 
       const data = await response.json();
@@ -434,7 +449,7 @@ export class TwitterService {
   }
 
   /**
-   * Verify like action
+   * Verify like action with 2025 API improvements
    */
   private async verifyLike(
     accessToken: string,
@@ -442,17 +457,19 @@ export class TwitterService {
   ): Promise<{ success: boolean; verified: boolean; error?: string }> {
     try {
       const response = await fetch(
-        `https://api.twitter.com/2/users/me/liked_tweets?max_results=100&tweet.fields=created_at`,
+        `${this.apiBase}/users/me/liked_tweets?max_results=100&tweet.fields=created_at`,
         {
           headers: {
             'Authorization': `Bearer ${accessToken}`,
-            'User-Agent': 'Raid2Earn Bot/1.0',
+            'User-Agent': 'Raid2Earn Bot/2.0',
+            'Accept': 'application/json',
           },
         }
       );
 
       if (!response.ok) {
-        throw new Error(`Twitter API error: ${response.status}`);
+        const errorData = await this.parseErrorResponse(response);
+        throw new Error(`Twitter API error: ${errorData.detail || response.statusText}`);
       }
 
       const data = await response.json();
@@ -478,7 +495,7 @@ export class TwitterService {
   }
 
   /**
-   * Verify follow action
+   * Verify follow action with 2025 API improvements
    */
   private async verifyFollow(
     accessToken: string,
@@ -486,17 +503,19 @@ export class TwitterService {
   ): Promise<{ success: boolean; verified: boolean; error?: string }> {
     try {
       const response = await fetch(
-        `https://api.twitter.com/2/users/me/following?max_results=1000`,
+        `${this.apiBase}/users/me/following?max_results=1000&user.fields=username`,
         {
           headers: {
             'Authorization': `Bearer ${accessToken}`,
-            'User-Agent': 'Raid2Earn Bot/1.0',
+            'User-Agent': 'Raid2Earn Bot/2.0',
+            'Accept': 'application/json',
           },
         }
       );
 
       if (!response.ok) {
-        throw new Error(`Twitter API error: ${response.status}`);
+        const errorData = await this.parseErrorResponse(response);
+        throw new Error(`Twitter API error: ${errorData.detail || response.statusText}`);
       }
 
       const data = await response.json();
@@ -517,7 +536,7 @@ export class TwitterService {
   }
 
   /**
-   * Verify reply action
+   * Verify reply action with 2025 API improvements
    */
   private async verifyReply(
     accessToken: string,
@@ -525,17 +544,19 @@ export class TwitterService {
   ): Promise<{ success: boolean; verified: boolean; error?: string }> {
     try {
       const response = await fetch(
-        `https://api.twitter.com/2/users/me/tweets?max_results=100&tweet.fields=created_at,text,in_reply_to_user_id`,
+        `${this.apiBase}/users/me/tweets?max_results=100&tweet.fields=created_at,text,in_reply_to_user_id`,
         {
           headers: {
             'Authorization': `Bearer ${accessToken}`,
-            'User-Agent': 'Raid2Earn Bot/1.0',
+            'User-Agent': 'Raid2Earn Bot/2.0',
+            'Accept': 'application/json',
           },
         }
       );
 
       if (!response.ok) {
-        throw new Error(`Twitter API error: ${response.status}`);
+        const errorData = await this.parseErrorResponse(response);
+        throw new Error(`Twitter API error: ${errorData.detail || response.statusText}`);
       }
 
       const data = await response.json();
@@ -563,7 +584,7 @@ export class TwitterService {
   }
 
   /**
-   * Verify quote tweet action
+   * Verify quote tweet action with 2025 API improvements
    */
   private async verifyQuote(
     accessToken: string,
@@ -571,17 +592,19 @@ export class TwitterService {
   ): Promise<{ success: boolean; verified: boolean; error?: string }> {
     try {
       const response = await fetch(
-        `https://api.twitter.com/2/users/me/tweets?max_results=100&tweet.fields=created_at,text,referenced_tweets`,
+        `${this.apiBase}/users/me/tweets?max_results=100&tweet.fields=created_at,text,referenced_tweets`,
         {
           headers: {
             'Authorization': `Bearer ${accessToken}`,
-            'User-Agent': 'Raid2Earn Bot/1.0',
+            'User-Agent': 'Raid2Earn Bot/2.0',
+            'Accept': 'application/json',
           },
         }
       );
 
       if (!response.ok) {
-        throw new Error(`Twitter API error: ${response.status}`);
+        const errorData = await this.parseErrorResponse(response);
+        throw new Error(`Twitter API error: ${errorData.detail || response.statusText}`);
       }
 
       const data = await response.json();
@@ -611,14 +634,59 @@ export class TwitterService {
   }
 
   /**
-   * Generate random string for OAuth
+   * Parse Twitter API error responses (2025 format)
+   */
+  private async parseErrorResponse(response: Response): Promise<TwitterAPIError> {
+    try {
+      const errorData = await response.json();
+      return {
+        code: response.status,
+        title: errorData.title || 'API Error',
+        detail: errorData.detail || errorData.message || response.statusText,
+        type: errorData.type || 'https://api.twitter.com/2/problems/unknown',
+      };
+    } catch {
+      return {
+        code: response.status,
+        title: 'HTTP Error',
+        detail: response.statusText,
+        type: 'https://api.twitter.com/2/problems/http-error',
+      };
+    }
+  }
+
+  /**
+   * Extract rate limit information from response headers
+   */
+  private extractRateLimitInfo(headers: Headers): {
+    remaining: number;
+    reset: number;
+    limit: number;
+  } | undefined {
+    const remaining = headers.get('x-rate-limit-remaining');
+    const reset = headers.get('x-rate-limit-reset');
+    const limit = headers.get('x-rate-limit-limit');
+
+    if (remaining && reset && limit) {
+      return {
+        remaining: parseInt(remaining),
+        reset: parseInt(reset),
+        limit: parseInt(limit),
+      };
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Generate random string for OAuth (2025 security standards)
    */
   private generateRandomString(length: number): string {
     return randomBytes(length).toString('base64url');
   }
 
   /**
-   * Generate PKCE code challenge
+   * Generate PKCE code challenge (2025 OAuth standard)
    */
   private generateCodeChallenge(codeVerifier: string): string {
     const hash = createHash('sha256');
@@ -627,11 +695,11 @@ export class TwitterService {
   }
 
   /**
-   * Clean up expired OAuth states
+   * Clean up expired OAuth states (2025 security)
    */
   cleanupExpiredStates(): void {
     const now = Date.now();
-    const maxAge = 10 * 60 * 1000; // 10 minutes
+    const maxAge = 5 * 60 * 1000; // Reduced to 5 minutes for 2025 security
 
     for (const [userId, state] of this.oauthStates.entries()) {
       if (now - state.timestamp > maxAge) {
@@ -641,42 +709,62 @@ export class TwitterService {
   }
 
   /**
-   * Get rate limit information
+   * Get rate limit information with 2025 API
    */
   async getRateLimitInfo(accessToken: string): Promise<{ success: boolean; limits?: any; error?: string }> {
     try {
-      const response = await fetch('https://api.twitter.com/2/users/me', {
+      const response = await fetch(`${this.apiBase}/users/me`, {
         headers: {
           'Authorization': `Bearer ${accessToken}`,
-          'User-Agent': 'Raid2Earn Bot/1.0',
+          'User-Agent': 'Raid2Earn Bot/2.0',
+          'Accept': 'application/json',
         },
       });
 
-      const rateLimitRemaining = response.headers.get('x-rate-limit-remaining');
-      const rateLimitReset = response.headers.get('x-rate-limit-reset');
-      const rateLimitLimit = response.headers.get('x-rate-limit-limit');
+      const rateLimitInfo = this.extractRateLimitInfo(response.headers);
 
       return {
         success: true,
-        limits: {
-          remaining: rateLimitRemaining ? parseInt(rateLimitRemaining) : null,
-          reset: rateLimitReset ? parseInt(rateLimitReset) : null,
-          limit: rateLimitLimit ? parseInt(rateLimitLimit) : null,
-        },
+        limits: rateLimitInfo,
       };
     } catch (error: any) {
       return { success: false, error: error.message };
     }
   }
+
+  /**
+   * Check if service is properly configured for 2025
+   */
+  isConfigured(): boolean {
+    return !!(this.config.bearerToken && this.config.clientId && this.config.clientSecret);
+  }
+
+  /**
+   * Get service status and configuration info
+   */
+  getServiceStatus(): {
+    configured: boolean;
+    apiVersion: string;
+    hasBearerToken: boolean;
+    hasOAuth: boolean;
+  } {
+    return {
+      configured: this.isConfigured(),
+      apiVersion: this.apiVersion,
+      hasBearerToken: !!this.config.bearerToken,
+      hasOAuth: !!(this.config.clientId && this.config.clientSecret),
+    };
+  }
 }
 
-// Default configuration for 2025
+// Default configuration for 2025 Twitter API
 export const defaultTwitterConfig: TwitterConfig = {
   clientId: process.env.TWITTER_CLIENT_ID || '',
   clientSecret: process.env.TWITTER_CLIENT_SECRET || '',
   redirectUri: process.env.TWITTER_REDIRECT_URI || 'https://your-domain.com/auth/twitter/callback',
   scopes: ['tweet.read', 'users.read', 'follows.read', 'like.read', 'offline.access'],
   bearerToken: process.env.TWITTER_BEARER_TOKEN || '', // For public API access
+  apiVersion: '2', // Latest Twitter API version
 };
 
 // Export singleton instance

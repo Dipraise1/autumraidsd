@@ -4,7 +4,7 @@ import { twitterService } from '../services/twitter';
 export async function verifyUsernameCommand(ctx: Context) {
   try {
     // Check if user has provided a username
-    const messageText = ctx.message?.text || '';
+    const messageText = (ctx.message as any)?.text || '';
     const username = messageText.replace('/verify', '').trim();
 
     if (!username) {
@@ -66,7 +66,7 @@ export async function verifyUsernameCommand(ctx: Context) {
       `**Followers:** ${user.followersCount.toLocaleString()}\n` +
       `**Following:** ${user.followingCount.toLocaleString()}\n` +
       `**Total Tweets:** ${user.tweetCount.toLocaleString()}\n` +
-      `**Account Created:** ${user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'Unknown'}\n\n' +
+      `**Account Created:** ${user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'Unknown'}\n\n` +
       (user.description ? `**Bio:** ${user.description}\n\n` : '') +
       '🎯 **This username is valid for raids!**\n\n' +
       'You can now use this username in your raid campaigns.';
